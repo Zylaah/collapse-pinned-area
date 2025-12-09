@@ -1072,6 +1072,13 @@
         .zen-current-workspace-indicator-icon {
             position: relative;
         }
+        /* Workspace indicator spacing (moved from chrome.css) */
+        .zen-current-workspace-indicator .zen-current-workspace-indicator-icon {
+            margin-bottom: 4px !important;
+        }
+        .zen-current-workspace-indicator .zen-current-workspace-indicator-name {
+            margin-bottom: 2px !important;
+        }
     `;
     document.head.appendChild(style);
 
