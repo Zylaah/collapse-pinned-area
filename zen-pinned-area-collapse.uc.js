@@ -189,17 +189,76 @@
                 return;
             }
 
-            // Skip the active tab when collapsing - keep it visible
-            if (collapse && activeTab && (item === activeTab || item.contains && item.contains(activeTab))) {
+            // Active tab handling
+            const isActiveTab = activeTab && item === activeTab;
+            const containsActiveTab = activeTab && item !== activeTab && item.contains && item.contains(activeTab);
+            
+            // Skip direct active tab element so it stays fully visible
+            if (collapse && isActiveTab) {
                 return;
             }
 
             cacheOriginalBoxMetrics(item);
-            
-            // Get all nested collapsed items BEFORE we start any animation
+
+            // Get all nested collapsed items BEFORE we start any animation/measurement
             const nestedCollapsed = getNestedCollapsedItems(item);
+
+            // Helper to measure full height even if the folder container is hidden/collapsed
+            const measureFullHeight = () => {
+                const container = item.querySelector('.tab-group-container');
+                const wasHidden = container?.hasAttribute('hidden');
+                if (wasHidden) {
+                    container.removeAttribute('hidden');
+                }
+                // Temporarily expand nested collapsed items for measurement
+                expandNestedForMeasurement(nestedCollapsed);
+                const measured = item.scrollHeight;
+                // Restore nested collapsed items
+                restoreNestedCollapsed(nestedCollapsed);
+                if (wasHidden) {
+                    container.setAttribute('hidden', 'true');
+                }
+                return measured;
+            };
+
+            // Cache full height for reliable re-expand (especially after partial collapses)
+            if (collapse && !item.dataset.zenFullHeight) {
+                item.dataset.zenFullHeight = measureFullHeight();
+            }
+
+            // Precompute target height when we need to keep the active tab visible inside a folder
+            let activeTabTargetHeight = 0;
+            if (containsActiveTab) {
+                const labelBox = item.querySelector('.tab-group-label-container');
+                const labelHeight = labelBox ? labelBox.getBoundingClientRect().height : 0;
+                const activeHeight = activeTab.getBoundingClientRect().height;
+                activeTabTargetHeight = labelHeight + activeHeight;
+            }
             
             const finalizeExpandedState = () => {
+                // If this folder was collapsed by our pinned-area flow, fully restore its native state
+                if (item.hasAttribute && item.hasAttribute('zen-pinned-collapse-active')) {
+                    item.removeAttribute('zen-pinned-collapse-active');
+                    item.removeAttribute('zen-pinned-collapse-collapsed');
+                    item.removeAttribute('has-active');
+                    if (typeof item.activeTabs !== 'undefined') {
+                        try {
+                            item.activeTabs = [];
+                        } catch (e) {
+                            // ignore if setter not available
+                        }
+                    }
+                    try {
+                        item.collapsed = false;
+                    } catch (e) {
+                        item.removeAttribute('collapsed');
+                    }
+                    const iconSvg = item.querySelector && item.querySelector('.tab-group-folder-icon svg');
+                    if (iconSvg) {
+                        iconSvg.setAttribute('state', 'open');
+                        iconSvg.setAttribute('active', 'false');
+                    }
+                }
                 item.style.maxHeight = '';
                 item.style.opacity = '';
                 item.style.overflow = '';
@@ -223,10 +282,63 @@
             };
             
             const finalizeCollapsedState = () => {
-                item.style.maxHeight = '0px';
-                item.style.opacity = '0';
-                item.style.overflow = 'hidden';
-                setCollapsedBoxStyles(item, true);
+                if (containsActiveTab) {
+                    // Mirror Zen behavior: mark folder as having an active item so re-expand works
+                    // Also mark with our own attribute so we know to clean it up later
+                    item.setAttribute('zen-pinned-collapse-active', 'true');
+                    item.setAttribute('has-active', 'true');
+                    // Force native collapsed flag so CSS/icon logic matches Zen (only if not already collapsed)
+                    if (!item.hasAttribute('collapsed')) {
+                        item.setAttribute('zen-pinned-collapse-collapsed', 'true');
+                        try {
+                            item.collapsed = true;
+                        } catch (e) {
+                            item.setAttribute('collapsed', 'true');
+                        }
+                    }
+                    if (typeof item.activeTabs !== 'undefined' && activeTab) {
+                        try {
+                            item.activeTabs = [activeTab];
+                        } catch (e) {
+                            // ignore if setter not available
+                        }
+                    }
+                    // Update folder icon to collapsed/active state (shows dots)
+                    const iconSvg = item.querySelector && item.querySelector('.tab-group-folder-icon svg');
+                    if (iconSvg) {
+                        iconSvg.setAttribute('state', 'close');
+                        iconSvg.setAttribute('active', 'true');
+                    }
+                    // Keep the active tab visible; collapse the rest
+                    item.style.maxHeight = activeTabTargetHeight ? `${activeTabTargetHeight}px` : '';
+                    item.style.opacity = '';
+                    item.style.overflow = 'hidden';
+                    setCollapsedBoxStyles(item, true);
+                    // Hide other children inside the folder container
+                    const container = item.querySelector('.tab-group-container');
+                    if (container) {
+                        Array.from(container.children).forEach(child => {
+                            if (child !== activeTab) {
+                                cacheOriginalBoxMetrics(child);
+                                child.style.maxHeight = '0px';
+                                child.style.opacity = '0';
+                                child.style.overflow = 'hidden';
+                                setCollapsedBoxStyles(child, true);
+                            } else {
+                                // Active tab stays visible
+                                child.style.maxHeight = '';
+                                child.style.opacity = '';
+                                child.style.overflow = '';
+                                setCollapsedBoxStyles(child, false);
+                            }
+                        });
+                    }
+                } else {
+                    item.style.maxHeight = '0px';
+                    item.style.opacity = '0';
+                    item.style.overflow = 'hidden';
+                    setCollapsedBoxStyles(item, true);
+                }
                 // Also finalize nested items
                 nestedCollapsed.forEach(({ element }) => {
                     cacheOriginalBoxMetrics(element);
@@ -242,18 +354,67 @@
 
             if (!animate) {
                 if (collapse) {
-                    item.style.maxHeight = '0px';
-                    item.style.opacity = '0';
-                    item.style.overflow = 'hidden';
-                    setCollapsedBoxStyles(item, true);
-                    // Also collapse nested items
-                    nestedCollapsed.forEach(({ element }) => {
-                        cacheOriginalBoxMetrics(element);
-                        element.style.maxHeight = '0px';
-                        element.style.opacity = '0';
-                        element.style.overflow = 'hidden';
-                        setCollapsedBoxStyles(element, true);
-                    });
+                    if (containsActiveTab) {
+                        // Mark as active before collapsing so Zen's logic can align with us
+                        // Also mark with our own attribute so we know to clean it up later
+                        item.setAttribute('zen-pinned-collapse-active', 'true');
+                        item.setAttribute('has-active', 'true');
+                            if (!item.hasAttribute('collapsed')) {
+                                item.setAttribute('zen-pinned-collapse-collapsed', 'true');
+                                try {
+                                    item.collapsed = true;
+                                } catch (e) {
+                                    item.setAttribute('collapsed', 'true');
+                                }
+                            }
+                        if (typeof item.activeTabs !== 'undefined' && activeTab) {
+                            try {
+                                item.activeTabs = [activeTab];
+                            } catch (e) {
+                                // ignore if setter not available
+                            }
+                        }
+                        // Update folder icon to collapsed/active state (shows dots)
+                        const iconSvg = item.querySelector && item.querySelector('.tab-group-folder-icon svg');
+                        if (iconSvg) {
+                            iconSvg.setAttribute('state', 'close');
+                            iconSvg.setAttribute('active', 'true');
+                        }
+                        item.style.maxHeight = activeTabTargetHeight ? `${activeTabTargetHeight}px` : '';
+                        item.style.opacity = '';
+                        item.style.overflow = 'hidden';
+                        setCollapsedBoxStyles(item, true);
+                        const container = item.querySelector('.tab-group-container');
+                        if (container) {
+                            Array.from(container.children).forEach(child => {
+                                if (child !== activeTab) {
+                                    cacheOriginalBoxMetrics(child);
+                                    child.style.maxHeight = '0px';
+                                    child.style.opacity = '0';
+                                    child.style.overflow = 'hidden';
+                                    setCollapsedBoxStyles(child, true);
+                                } else {
+                                    child.style.maxHeight = '';
+                                    child.style.opacity = '';
+                                    child.style.overflow = '';
+                                    setCollapsedBoxStyles(child, false);
+                                }
+                            });
+                        }
+                    } else {
+                        item.style.maxHeight = '0px';
+                        item.style.opacity = '0';
+                        item.style.overflow = 'hidden';
+                        setCollapsedBoxStyles(item, true);
+                        // Also collapse nested items
+                        nestedCollapsed.forEach(({ element }) => {
+                            cacheOriginalBoxMetrics(element);
+                            element.style.maxHeight = '0px';
+                            element.style.opacity = '0';
+                            element.style.overflow = 'hidden';
+                            setCollapsedBoxStyles(element, true);
+                        });
+                    }
                 } else {
                     finalizeExpandedState();
                 }
@@ -267,7 +428,7 @@
                 element.classList.add('zen-collapse-anim-target');
             });
             
-            const currentHeight = item.scrollHeight;
+            const currentHeight = item.dataset.zenFullHeight ? parseFloat(item.dataset.zenFullHeight) : measureFullHeight();
             item.style.overflow = 'hidden';
 
             const onTransitionEnd = (event) => {
@@ -290,17 +451,46 @@
                 setCollapsedBoxStyles(item, false);
 
                 requestAnimationFrame(() => {
-                    item.style.maxHeight = '0px';
-                    item.style.opacity = '0';
-                    setCollapsedBoxStyles(item, true);
-                    // Collapse nested items in sync
-                    nestedCollapsed.forEach(({ element }) => {
-                        cacheOriginalBoxMetrics(element);
-                        element.style.overflow = 'hidden';
-                        element.style.maxHeight = '0px';
-                        element.style.opacity = '0';
-                        setCollapsedBoxStyles(element, true);
-                    });
+                    if (containsActiveTab) {
+                        // Ensure icon reflects collapsed/active immediately during animation
+                        const iconSvg = item.querySelector && item.querySelector('.tab-group-folder-icon svg');
+                        if (iconSvg) {
+                            iconSvg.setAttribute('state', 'close');
+                            iconSvg.setAttribute('active', 'true');
+                        }
+                        item.style.maxHeight = activeTabTargetHeight ? `${activeTabTargetHeight}px` : '';
+                        item.style.opacity = '';
+                        setCollapsedBoxStyles(item, true);
+                        const container = item.querySelector('.tab-group-container');
+                        if (container) {
+                            Array.from(container.children).forEach(child => {
+                                if (child !== activeTab) {
+                                    cacheOriginalBoxMetrics(child);
+                                    child.style.overflow = 'hidden';
+                                    child.style.maxHeight = '0px';
+                                    child.style.opacity = '0';
+                                    setCollapsedBoxStyles(child, true);
+                                } else {
+                                    child.style.maxHeight = '';
+                                    child.style.opacity = '';
+                                    child.style.overflow = '';
+                                    setCollapsedBoxStyles(child, false);
+                                }
+                            });
+                        }
+                    } else {
+                        item.style.maxHeight = '0px';
+                        item.style.opacity = '0';
+                        setCollapsedBoxStyles(item, true);
+                        // Collapse nested items in sync
+                        nestedCollapsed.forEach(({ element }) => {
+                            cacheOriginalBoxMetrics(element);
+                            element.style.overflow = 'hidden';
+                            element.style.maxHeight = '0px';
+                            element.style.opacity = '0';
+                            setCollapsedBoxStyles(element, true);
+                        });
+                    }
                 });
             } else {
                 // For expanding, we need to measure the FULL height including expanded nested content
@@ -308,7 +498,9 @@
                 expandNestedForMeasurement(nestedCollapsed);
                 
                 // Now measure the full height with nested content expanded
-                const fullTargetHeight = item.scrollHeight || currentHeight;
+                const storedHeight = parseFloat(item.dataset.zenFullHeight || '') || 0;
+                const measuredHeight = measureFullHeight();
+                const fullTargetHeight = Math.max(storedHeight, measuredHeight, currentHeight);
                 
                 // Restore nested items to collapsed state for the animation start
                 restoreNestedCollapsed(nestedCollapsed);
@@ -331,7 +523,38 @@
                     });
                 });
             }
+            
+            // Clean up stored height after expansion completes
+            if (!collapse) {
+                item.addEventListener('transitionend', function cleanupHeight(e) {
+                    if (e.propertyName === 'max-height') {
+                        item.removeEventListener('transitionend', cleanupHeight);
+                        delete item.dataset.zenFullHeight;
+                    }
+                });
+            }
         });
+    }
+
+    // Helper to clear inline collapse styles when a folder is expanded manually
+    function clearFolderInlineCollapseStyles(folder) {
+        if (!folder) return;
+        const clearStyles = (el) => {
+            el.style.maxHeight = '';
+            el.style.opacity = '';
+            el.style.overflow = '';
+            el.style.marginTop = '';
+            el.style.marginBottom = '';
+            el.style.paddingTop = '';
+            el.style.paddingBottom = '';
+            el.classList.remove('zen-collapse-anim-target');
+            delete el.dataset.zenFullHeight;
+        };
+        clearStyles(folder);
+        const container = folder.querySelector('.tab-group-container');
+        if (container) {
+            Array.from(container.children).forEach(clearStyles);
+        }
     }
 
     // Function to apply collapsed state to folders and tabs (without toggling)
@@ -1143,6 +1366,19 @@
                     });
                 }
             }
+
+            // Watch for zen-folder collapsed attribute toggles to clear inline collapse styles
+            if (mutation.type === 'attributes' && mutation.attributeName === 'collapsed') {
+                const target = mutation.target;
+                if (target && target.tagName && target.tagName.toLowerCase() === 'zen-folder') {
+                    if (!target.hasAttribute('collapsed')) {
+                        clearFolderInlineCollapseStyles(target);
+                        // Also clean up our marker if present
+                        target.removeAttribute('zen-pinned-collapse-active');
+                        target.removeAttribute('zen-pinned-collapse-collapsed');
+                    }
+                }
+            }
             
             for (const node of mutation.addedNodes) {
                 if (node.nodeType === Node.ELEMENT_NODE) {
@@ -1190,7 +1426,7 @@
             childList: true,
             subtree: true,
             attributes: true,
-            attributeFilter: ['movingtab']
+            attributeFilter: ['movingtab', 'collapsed']
         });
     } else {
         document.addEventListener('DOMContentLoaded', () => {
@@ -1199,7 +1435,7 @@
                     childList: true,
                     subtree: true,
                     attributes: true,
-                    attributeFilter: ['movingtab']
+                    attributeFilter: ['movingtab', 'collapsed']
                 });
             }
         });
