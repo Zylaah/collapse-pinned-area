@@ -381,7 +381,16 @@
                     }
                     folder.classList.add('zen-flatten-folder');
                 } else {
-                    folder.classList.remove('zen-flatten-folder');
+                    // Restore collapsed state if it was saved, but KEEP zen-flatten-folder
+                    // so the header remains hidden while we animate the folder out.
+                    if (folder.dataset.originalStateSaved) {
+                        const wasCollapsed = folder.dataset.zenOriginalCollapsed === 'true';
+                        if (folder.collapsed !== wasCollapsed) {
+                            folder.collapsed = wasCollapsed;
+                        }
+                        delete folder.dataset.zenOriginalCollapsed;
+                        delete folder.dataset.originalStateSaved;
+                    }
                 }
             });
         } else {
