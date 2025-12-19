@@ -898,11 +898,14 @@
         }
         
         /* Rotate chevron when collapsed */
+        /* Default state is rotated 90deg (expanded) */
+        .zen-collapse-chevron {
+            transform: rotate(90deg);
+        }
+        
+        /* Only rotate back to 0deg when specifically collapsed */
         .zen-current-workspace-indicator[data-zen-collapsed="true"] .zen-collapse-chevron {
             transform: rotate(0deg) !important;
-        }
-        .zen-current-workspace-indicator:not([data-zen-collapsed="true"]) .zen-collapse-chevron {
-            transform: rotate(90deg) !important;
         }
         
         /* GENERAL HOVER BEHAVIOR (When icon exists) */
